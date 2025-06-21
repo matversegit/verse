@@ -210,7 +210,7 @@ export default function App() {
               <div className="card-body p-4">
                 <div className="text-center mb-4">
                   <h2 className="card-title fw-bold text-primary mb-2">
-                    🛠 {APP_NAME || 'Community Builder dApp'}
+                    🛠 {APP_NAME || 'BlockVerse'}
                   </h2>
                   <p className="text-muted small">
                     Compatible with SafePal, MetaMask & other Web3 wallets
