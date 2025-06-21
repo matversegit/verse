@@ -31,11 +31,87 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [walletAvailable, setWalletAvailable] = useState(false);
+  const [checkingWallet, setCheckingWallet] = useState(true);
 
-  // Check if environment variables are loaded
+  // Check wallet availability
+  const checkWalletAvailability = () => {
+    return new Promise((resolve) => {
+      // Check immediately
+      if (typeof window.ethereum !== 'undefined') {
+        resolve(true);
+        return;
+      }
+
+      // Wait for wallet to load (some wallets inject asynchronously)
+      let attempts = 0;
+      const maxAttempts = 50; // 5 seconds total
+      const checkInterval = setInterval(() => {
+        attempts++;
+        if (typeof window.ethereum !== 'undefined') {
+          clearInterval(checkInterval);
+          resolve(true);
+        } else if (attempts >= maxAttempts) {
+          clearInterval(checkInterval);
+          resolve(false);
+        }
+      }, 100);
+    });
+  };
+
+  // Check if environment variables are loaded and wallet availability
   useEffect(() => {
-    if (!CONTRACT_ADDRESS || !USDT_ADDRESS) {
-      setError('Missing environment configuration. Please check your .env file.');
+    const initializeApp = async () => {
+      // Check environment variables
+      if (!CONTRACT_ADDRESS || !USDT_ADDRESS) {
+        setError('Missing environment configuration. Please check your .env file.');
+        setCheckingWallet(false);
+        return;
+      }
+
+      // Check wallet availability
+      const isWalletAvailable = await checkWalletAvailability();
+      setWalletAvailable(isWalletAvailable);
+      setCheckingWallet(false);
+
+      if (!isWalletAvailable) {
+        setError('No Web3 wallet detected. Please install MetaMask, SafePal, or another Web3 wallet extension.');
+      }
+    };
+
+    initializeApp();
+  }, []);
+
+  // Listen for account changes
+  useEffect(() => {
+    if (typeof window.ethereum !== 'undefined') {
+      const handleAccountsChanged = (accounts) => {
+        if (accounts.length === 0) {
+          // User disconnected wallet
+          setAccount(null);
+          setContract(null);
+          setSigner(null);
+          setUser(null);
+        } else {
+          // Account changed, reconnect
+          connectWallet();
+        }
+      };
+
+      const handleChainChanged = (chainId) => {
+        // Reload the page when chain changes
+        window.location.reload();
+      };
+
+      window.ethereum.on('accountsChanged', handleAccountsChanged);
+      window.ethereum.on('chainChanged', handleChainChanged);
+
+      return () => {
+        if (window.ethereum.removeListener) {
+          window.ethereum.removeListener('accountsChanged', handleAccountsChanged);
+          window.ethereum.removeListener('chainChanged', handleChainChanged);
+        }
+      };
     }
   }, []);
 
@@ -44,53 +120,59 @@ export default function App() {
       setLoading(true);
       setError(null);
 
-      // Check if MetaMask or other wallet is available
-      if (typeof window.ethereum !== 'undefined') {
-        // Use standard Web3 wallet connection (works with SafePal, MetaMask, etc.)
-        await window.ethereum.request({ method: 'eth_requestAccounts' });
-        
-        const provider = new BrowserProvider(window.ethereum);
-        const signer = await provider.getSigner();
-        const address = await signer.getAddress();
+      // Double-check wallet availability
+      if (typeof window.ethereum === 'undefined') {
+        throw new Error('No Web3 wallet detected. Please install MetaMask, SafePal, or another Web3 wallet extension.');
+      }
 
-        // Check if we're on the correct network
-        const network = await provider.getNetwork();
-        if (Number(network.chainId) !== CHAIN_ID) {
-          try {
+      // Request account access
+      const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+      
+      if (accounts.length === 0) {
+        throw new Error('No accounts found. Please unlock your wallet.');
+      }
+      
+      const provider = new BrowserProvider(window.ethereum);
+      const signer = await provider.getSigner();
+      const address = await signer.getAddress();
+
+      // Check if we're on the correct network
+      const network = await provider.getNetwork();
+      if (Number(network.chainId) !== CHAIN_ID) {
+        try {
+          await window.ethereum.request({
+            method: 'wallet_switchEthereumChain',
+            params: [{ chainId: `0x${CHAIN_ID.toString(16)}` }],
+          });
+        } catch (switchError) {
+          // If network doesn't exist, add it
+          if (switchError.code === 4902) {
             await window.ethereum.request({
-              method: 'wallet_switchEthereumChain',
-              params: [{ chainId: `0x${CHAIN_ID.toString(16)}` }],
+              method: 'wallet_addEthereumChain',
+              params: [{
+                chainId: `0x${CHAIN_ID.toString(16)}`,
+                chainName: NETWORK_NAME,
+                nativeCurrency: {
+                  name: CURRENCY_NAME,
+                  symbol: CURRENCY_SYMBOL,
+                  decimals: 18
+                },
+                rpcUrls: [RPC_URL],
+                blockExplorerUrls: [EXPLORER_URL]
+              }]
             });
-          } catch (switchError) {
-            // If network doesn't exist, add it
-            if (switchError.code === 4902) {
-              await window.ethereum.request({
-                method: 'wallet_addEthereumChain',
-                params: [{
-                  chainId: `0x${CHAIN_ID.toString(16)}`,
-                  chainName: NETWORK_NAME,
-                  nativeCurrency: {
-                    name: CURRENCY_NAME,
-                    symbol: CURRENCY_SYMBOL,
-                    decimals: 18
-                  },
-                  rpcUrls: [RPC_URL],
-                  blockExplorerUrls: [EXPLORER_URL]
-                }]
-              });
-            }
+          } else {
+            throw switchError;
           }
         }
-
-        const contract = new Contract(CONTRACT_ADDRESS, ABI, signer);
-
-        setAccount(address);
-        setContract(contract);
-        setSigner(signer);
-        await loadUser(contract);
-      } else {
-        throw new Error('No Web3 wallet detected. Please install SafePal, MetaMask, or another Web3 wallet.');
       }
+
+      const contract = new Contract(CONTRACT_ADDRESS, ABI, signer);
+
+      setAccount(address);
+      setContract(contract);
+      setSigner(signer);
+      await loadUser(contract);
     } catch (err) {
       console.error('Connection error:', err);
       setError(err.message || 'Failed to connect wallet');
@@ -201,6 +283,57 @@ export default function App() {
     }
   };
 
+  const getWalletDownloadLinks = () => {
+    const userAgent = navigator.userAgent;
+    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(userAgent);
+    
+    if (isMobile) {
+      return (
+        <div className="mt-3">
+          <p className="text-muted small mb-2">Download a wallet app:</p>
+          <div className="d-flex gap-2 flex-wrap">
+            <a href="https://metamask.io/download/" target="_blank" rel="noopener noreferrer" className="btn btn-outline-primary btn-sm">
+              MetaMask
+            </a>
+            <a href="https://www.safepal.io/" target="_blank" rel="noopener noreferrer" className="btn btn-outline-primary btn-sm">
+              SafePal
+            </a>
+            <a href="https://trustwallet.com/" target="_blank" rel="noopener noreferrer" className="btn btn-outline-primary btn-sm">
+              Trust Wallet
+            </a>
+          </div>
+        </div>
+      );
+    } else {
+      return (
+        <div className="mt-3">
+          <p className="text-muted small mb-2">Install a browser extension:</p>
+          <div className="d-flex gap-2 flex-wrap">
+            <a href="https://metamask.io/download/" target="_blank" rel="noopener noreferrer" className="btn btn-outline-primary btn-sm">
+              MetaMask
+            </a>
+            <a href="https://www.safepal.io/" target="_blank" rel="noopener noreferrer" className="btn btn-outline-primary btn-sm">
+              SafePal
+            </a>
+          </div>
+        </div>
+      );
+    }
+  };
+
+  if (checkingWallet) {
+    return (
+      <div className="min-vh-100 d-flex align-items-center justify-content-center" style={{background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)'}}>
+        <div className="text-center text-white">
+          <div className="spinner-border text-light mb-3" role="status">
+            <span className="visually-hidden">Loading...</span>
+          </div>
+          <p>Checking for Web3 wallet...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-vh-100" style={{background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)'}}>
       <div className="container py-5">
@@ -210,7 +343,7 @@ export default function App() {
               <div className="card-body p-4">
                 <div className="text-center mb-4">
                   <h2 className="card-title fw-bold text-primary mb-2">
-                    🛠 {APP_NAME || 'BlockVerse'}
+                    🛠 {APP_NAME || 'Community Builder dApp'}
                   </h2>
                   <p className="text-muted small">
                     Compatible with SafePal, MetaMask & other Web3 wallets
@@ -233,10 +366,25 @@ export default function App() {
                         </small>
                       </div>
                     )}
+                    {error.includes('No Web3 wallet') && getWalletDownloadLinks()}
                   </div>
                 )}
 
-                {!account ? (
+                {!walletAvailable ? (
+                  <div className="text-center">
+                    <div className="alert alert-warning" role="alert">
+                      <h6 className="alert-heading">⚠️ No Web3 Wallet Found</h6>
+                      <p className="mb-0">Please install a Web3 wallet to use this application.</p>
+                    </div>
+                    {getWalletDownloadLinks()}
+                    <button 
+                      onClick={() => window.location.reload()}
+                      className="btn btn-outline-primary mt-3"
+                    >
+                      🔄 Refresh Page
+                    </button>
+                  </div>
+                ) : !account ? (
                   <button 
                     onClick={connectWallet}
                     disabled={loading}
