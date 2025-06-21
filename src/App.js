@@ -371,6 +371,14 @@ export default function App() {
             📱 Open in MetaMask
           </a>
           <a 
+            href={deepLinks.safepal} 
+            className="btn btn-outline-primary btn-sm"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            📱 Open in SafePal Browser
+          </a>
+          <a 
             href={deepLinks.trust} 
             className="btn btn-outline-primary btn-sm"
             target="_blank"
