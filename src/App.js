@@ -33,22 +33,69 @@ export default function App() {
   const [error, setError] = useState(null);
   const [walletAvailable, setWalletAvailable] = useState(false);
   const [checkingWallet, setCheckingWallet] = useState(true);
+  const [deviceType, setDeviceType] = useState('desktop');
+  const [walletType, setWalletType] = useState(null);
 
-  // Check wallet availability
+  // Detect device type and wallet
+  const detectDeviceAndWallet = () => {
+    const userAgent = navigator.userAgent;
+    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(userAgent);
+    const isIOS = /iPad|iPhone|iPod/.test(userAgent);
+    const isAndroid = /Android/.test(userAgent);
+    
+    setDeviceType(isMobile ? 'mobile' : 'desktop');
+
+    // Detect specific wallet apps on mobile
+    if (isMobile) {
+      // Check if we're inside a wallet app's browser
+      if (typeof window.ethereum !== 'undefined') {
+        // Try to detect specific wallet
+        if (window.ethereum.isMetaMask) {
+          setWalletType('MetaMask Mobile');
+        } else if (window.ethereum.isSafePal) {
+          setWalletType('SafePal');
+        } else if (window.ethereum.isTrust) {
+          setWalletType('Trust Wallet');
+        } else if (window.ethereum.isCoinbaseWallet) {
+          setWalletType('Coinbase Wallet');
+        } else {
+          setWalletType('Mobile Wallet');
+        }
+        return true;
+      }
+      return false;
+    } else {
+      // Desktop - check for browser extensions
+      if (typeof window.ethereum !== 'undefined') {
+        if (window.ethereum.isMetaMask) {
+          setWalletType('MetaMask');
+        } else if (window.ethereum.isSafePal) {
+          setWalletType('SafePal');
+        } else {
+          setWalletType('Web3 Wallet');
+        }
+        return true;
+      }
+      return false;
+    }
+  };
+
+  // Check wallet availability with mobile-specific logic
   const checkWalletAvailability = () => {
     return new Promise((resolve) => {
       // Check immediately
-      if (typeof window.ethereum !== 'undefined') {
+      if (detectDeviceAndWallet()) {
         resolve(true);
         return;
       }
 
-      // Wait for wallet to load (some wallets inject asynchronously)
+      // For mobile, don't wait too long as wallet apps either work immediately or not at all
+      const maxAttempts = deviceType === 'mobile' ? 20 : 50; // 2 seconds for mobile, 5 for desktop
       let attempts = 0;
-      const maxAttempts = 50; // 5 seconds total
+      
       const checkInterval = setInterval(() => {
         attempts++;
-        if (typeof window.ethereum !== 'undefined') {
+        if (detectDeviceAndWallet()) {
           clearInterval(checkInterval);
           resolve(true);
         } else if (attempts >= maxAttempts) {
@@ -69,13 +116,20 @@ export default function App() {
         return;
       }
 
+      // Detect device type first
+      detectDeviceAndWallet();
+
       // Check wallet availability
       const isWalletAvailable = await checkWalletAvailability();
       setWalletAvailable(isWalletAvailable);
       setCheckingWallet(false);
 
       if (!isWalletAvailable) {
-        setError('No Web3 wallet detected. Please install MetaMask, SafePal, or another Web3 wallet extension.');
+        if (deviceType === 'mobile') {
+          setError('Please open this app in a Web3 wallet browser (MetaMask, SafePal, Trust Wallet, etc.) or use WalletConnect.');
+        } else {
+          setError('No Web3 wallet extension detected. Please install MetaMask, SafePal, or another Web3 wallet extension.');
+        }
       }
     };
 
@@ -122,7 +176,11 @@ export default function App() {
 
       // Double-check wallet availability
       if (typeof window.ethereum === 'undefined') {
-        throw new Error('No Web3 wallet detected. Please install MetaMask, SafePal, or another Web3 wallet extension.');
+        if (deviceType === 'mobile') {
+          throw new Error('Please open this app in a Web3 wallet browser (MetaMask, SafePal, Trust Wallet, etc.)');
+        } else {
+          throw new Error('No Web3 wallet extension detected. Please install MetaMask, SafePal, or another Web3 wallet extension.');
+        }
       }
 
       // Request account access
@@ -283,41 +341,111 @@ export default function App() {
     }
   };
 
-  const getWalletDownloadLinks = () => {
-    const userAgent = navigator.userAgent;
-    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(userAgent);
+  // Generate deep links for mobile wallets
+  const generateDeepLinks = () => {
+    const currentUrl = encodeURIComponent(window.location.href);
     
-    if (isMobile) {
-      return (
-        <div className="mt-3">
-          <p className="text-muted small mb-2">Download a wallet app:</p>
-          <div className="d-flex gap-2 flex-wrap">
-            <a href="https://metamask.io/download/" target="_blank" rel="noopener noreferrer" className="btn btn-outline-primary btn-sm">
-              MetaMask
-            </a>
-            <a href="https://www.safepal.io/" target="_blank" rel="noopener noreferrer" className="btn btn-outline-primary btn-sm">
-              SafePal
-            </a>
-            <a href="https://trustwallet.com/" target="_blank" rel="noopener noreferrer" className="btn btn-outline-primary btn-sm">
-              Trust Wallet
-            </a>
-          </div>
+    return {
+      metamask: `https://metamask.app.link/dapp/${window.location.host}${window.location.pathname}`,
+      safepal: `safepal://wc?uri=${currentUrl}`,
+      trust: `trust://wc?uri=${currentUrl}`,
+      coinbase: `https://go.cb-w.com/dapp?cb_url=${currentUrl}`,
+    };
+  };
+
+  const getMobileWalletOptions = () => {
+    const deepLinks = generateDeepLinks();
+    
+    return (
+      <div className="mt-3">
+        <p className="text-muted small mb-3">
+          <strong>Option 1:</strong> Open this app in a wallet browser
+        </p>
+        <div className="d-grid gap-2">
+          <a 
+            href={deepLinks.metamask} 
+            className="btn btn-outline-primary btn-sm"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            📱 Open in MetaMask
+          </a>
+          <a 
+            href={deepLinks.trust} 
+            className="btn btn-outline-primary btn-sm"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            📱 Open in Trust Wallet
+          </a>
+          <a 
+            href={deepLinks.coinbase} 
+            className="btn btn-outline-primary btn-sm"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            📱 Open in Coinbase Wallet
+          </a>
         </div>
-      );
-    } else {
-      return (
-        <div className="mt-3">
-          <p className="text-muted small mb-2">Install a browser extension:</p>
-          <div className="d-flex gap-2 flex-wrap">
-            <a href="https://metamask.io/download/" target="_blank" rel="noopener noreferrer" className="btn btn-outline-primary btn-sm">
-              MetaMask
-            </a>
-            <a href="https://www.safepal.io/" target="_blank" rel="noopener noreferrer" className="btn btn-outline-primary btn-sm">
-              SafePal
-            </a>
-          </div>
+        
+        <p className="text-muted small mt-3 mb-2">
+          <strong>Option 2:</strong> Don't have a wallet? Download one:
+        </p>
+        <div className="d-flex gap-2 flex-wrap">
+          <a href="https://metamask.io/download/" target="_blank" rel="noopener noreferrer" className="btn btn-outline-secondary btn-sm">
+            Get MetaMask
+          </a>
+          <a href="https://www.safepal.io/" target="_blank" rel="noopener noreferrer" className="btn btn-outline-secondary btn-sm">
+            Get SafePal
+          </a>
+          <a href="https://trustwallet.com/" target="_blank" rel="noopener noreferrer" className="btn btn-outline-secondary btn-sm">
+            Get Trust Wallet
+          </a>
         </div>
-      );
+        
+        <div className="alert alert-info mt-3" role="alert">
+          <small>
+            💡 <strong>Tip:</strong> Copy this URL and paste it in your wallet app's browser, or use the "Open in..." buttons above.
+          </small>
+        </div>
+      </div>
+    );
+  };
+
+  const getDesktopWalletOptions = () => {
+    return (
+      <div className="mt-3">
+        <p className="text-muted small mb-2">Install a browser extension:</p>
+        <div className="d-flex gap-2 flex-wrap">
+          <a href="https://metamask.io/download/" target="_blank" rel="noopener noreferrer" className="btn btn-outline-primary btn-sm">
+            Install MetaMask
+          </a>
+          <a href="https://www.safepal.io/" target="_blank" rel="noopener noreferrer" className="btn btn-outline-primary btn-sm">
+            Install SafePal
+          </a>
+        </div>
+        <div className="alert alert-info mt-3" role="alert">
+          <small>
+            💡 After installing, refresh this page and click "Connect Wallet"
+          </small>
+        </div>
+      </div>
+    );
+  };
+
+  const copyUrlToClipboard = async () => {
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      alert('URL copied to clipboard! Paste it in your wallet app browser.');
+    } catch (err) {
+      // Fallback for browsers that don't support clipboard API
+      const textArea = document.createElement('textarea');
+      textArea.value = window.location.href;
+      document.body.appendChild(textArea);
+      textArea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textArea);
+      alert('URL copied to clipboard! Paste it in your wallet app browser.');
     }
   };
 
@@ -328,7 +456,7 @@ export default function App() {
           <div className="spinner-border text-light mb-3" role="status">
             <span className="visually-hidden">Loading...</span>
           </div>
-          <p>Checking for Web3 wallet...</p>
+          <p>Detecting {deviceType === 'mobile' ? 'wallet app' : 'Web3 wallet'}...</p>
         </div>
       </div>
     );
@@ -343,14 +471,19 @@ export default function App() {
               <div className="card-body p-4">
                 <div className="text-center mb-4">
                   <h2 className="card-title fw-bold text-primary mb-2">
-                    🛠 {APP_NAME || 'Community Builder dApp'}
+                    🛠 {APP_NAME || 'Blockverse'}
                   </h2>
                   <p className="text-muted small">
-                    Compatible with SafePal, MetaMask & other Web3 wallets
+                    {deviceType === 'mobile' ? 'Mobile Wallet Compatible' : 'Web3 Browser Extension Compatible'}
                   </p>
                   <small className="text-muted">
                     Network: {NETWORK_NAME} | Chain ID: {CHAIN_ID}
                   </small>
+                  {walletType && (
+                    <div className="badge bg-success mt-2">
+                      Connected via {walletType}
+                    </div>
+                  )}
                 </div>
 
                 {error && (
@@ -366,20 +499,37 @@ export default function App() {
                         </small>
                       </div>
                     )}
-                    {error.includes('No Web3 wallet') && getWalletDownloadLinks()}
                   </div>
                 )}
 
                 {!walletAvailable ? (
                   <div className="text-center">
                     <div className="alert alert-warning" role="alert">
-                      <h6 className="alert-heading">⚠️ No Web3 Wallet Found</h6>
-                      <p className="mb-0">Please install a Web3 wallet to use this application.</p>
+                      <h6 className="alert-heading">
+                        {deviceType === 'mobile' ? '📱 Mobile Wallet Required' : '🌐 Web3 Wallet Extension Required'}
+                      </h6>
+                      <p className="mb-0">
+                        {deviceType === 'mobile' 
+                          ? 'Please use a Web3 wallet app to access this dApp.'
+                          : 'Please install a Web3 wallet extension to use this application.'
+                        }
+                      </p>
                     </div>
-                    {getWalletDownloadLinks()}
+                    
+                    {deviceType === 'mobile' ? getMobileWalletOptions() : getDesktopWalletOptions()}
+                    
+                    {deviceType === 'mobile' && (
+                      <button 
+                        onClick={copyUrlToClipboard}
+                        className="btn btn-info mt-3"
+                      >
+                        📋 Copy App URL
+                      </button>
+                    )}
+                    
                     <button 
                       onClick={() => window.location.reload()}
-                      className="btn btn-outline-primary mt-3"
+                      className="btn btn-outline-primary mt-3 ms-2"
                     >
                       🔄 Refresh Page
                     </button>
@@ -395,7 +545,7 @@ export default function App() {
                         <span className="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>
                         Connecting...
                       </>
-                    ) : 'Connect Wallet'}
+                    ) : `Connect ${walletType || 'Wallet'}`}
                   </button>
                 ) : (
                   <div>
@@ -406,6 +556,11 @@ export default function App() {
                           <p className="card-text small text-muted mb-0">
                             Network: {NETWORK_NAME} ({CHAIN_ID})
                           </p>
+                          {walletType && (
+                            <p className="card-text small text-success mb-0">
+                              Via: {walletType}
+                            </p>
+                          )}
                         </div>
                       </div>
 
