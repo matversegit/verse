@@ -21,7 +21,9 @@ const ABI = [
 ];
 
 const USDT_ABI = [
-  "function approve(address spender, uint256 amount) external returns (bool)"
+  "function approve(address spender, uint256 amount) external returns (bool)",
+  "function allowance(address owner, address spender) external view returns (uint256)",
+  "function balanceOf(address account) external view returns (uint256)"
 ];
 
 export default function App() {
@@ -275,10 +277,43 @@ export default function App() {
     }
   };
 
+  const checkUSDTStatus = async () => {
+    if (!signer || !account) return;
+    
+    try {
+      const usdt = new Contract(USDT_ADDRESS, USDT_ABI, signer);
+      const balance = await usdt.balanceOf(account);
+      const allowance = await usdt.allowance(account, CONTRACT_ADDRESS);
+      
+      console.log('USDT Balance:', formatUnits(balance, 18));
+      console.log('USDT Allowance:', formatUnits(allowance, 18));
+      
+      return {
+        balance: formatUnits(balance, 18),
+        allowance: formatUnits(allowance, 18)
+      };
+    } catch (err) {
+      console.error('Error checking USDT status:', err);
+      return null;
+    }
+  };
+
   const register = async () => {
     try {
       setLoading(true);
       setError(null);
+
+      // Check USDT status first
+      const usdtStatus = await checkUSDTStatus();
+      if (usdtStatus) {
+        console.log('USDT Status:', usdtStatus);
+        if (parseFloat(usdtStatus.allowance) < 10) { // Assuming registration costs less than 10 USDT
+          throw new Error('Insufficient USDT allowance. Please approve USDT first (need at least 10 USDT allowance)');
+        }
+        if (parseFloat(usdtStatus.balance) < 10) { // Assuming registration costs less than 10 USDT
+          throw new Error('Insufficient USDT balance. You need at least 10 USDT to register');
+        }
+      }
 
       const referrer = prompt("Enter referrer address (or press Cancel for zero address):");
       const referrerAddress = referrer || "0x0000000000000000000000000000000000000000";
@@ -287,8 +322,41 @@ export default function App() {
         throw new Error('Contract not initialized');
       }
 
+      // Validate referrer address format
+      if (referrerAddress !== "0x0000000000000000000000000000000000000000" && 
+          !/^0x[a-fA-F0-9]{40}$/.test(referrerAddress)) {
+        throw new Error('Invalid referrer address format');
+      }
+
+      console.log('Attempting to register with referrer:', referrerAddress);
+      
+      // Try to estimate gas first to get a clearer error
+      try {
+        const gasEstimate = await contract.register.estimateGas(referrerAddress);
+        console.log('Gas estimate successful:', gasEstimate.toString());
+      } catch (gasError) {
+        console.error('Gas estimation failed:', gasError);
+        
+        // Try to get more specific error information
+        if (gasError.message.includes('already registered')) {
+          throw new Error('You are already registered');
+        } else if (gasError.message.includes('allowance')) {
+          throw new Error('Insufficient USDT allowance. Please approve USDT first');
+        } else if (gasError.message.includes('balance')) {
+          throw new Error('Insufficient USDT balance');
+        } else if (gasError.message.includes('referrer')) {
+          throw new Error('Invalid referrer address or referrer not registered');
+        } else {
+          throw new Error(`Registration failed: ${gasError.message || 'Unknown contract error'}`);
+        }
+      }
+
       const tx = await contract.register(referrerAddress);
-      await tx.wait();
+      console.log('Transaction sent:', tx.hash);
+      
+      const receipt = await tx.wait();
+      console.log('Transaction confirmed:', receipt);
+      
       alert("Registered successfully!");
       await loadUser(contract);
     } catch (err) {
@@ -479,7 +547,7 @@ export default function App() {
               <div className="card-body p-4">
                 <div className="text-center mb-4">
                   <h2 className="card-title fw-bold text-primary mb-2">
-                    🛠 {APP_NAME || 'Blockverse'}
+                    🛠 {APP_NAME || 'Community Builder dApp'}
                   </h2>
                   <p className="text-muted small">
                     {deviceType === 'mobile' ? 'Mobile Wallet Compatible' : 'Web3 Browser Extension Compatible'}
@@ -631,6 +699,23 @@ export default function App() {
                           {loading ? (
                             <span className="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
                           ) : 'Withdraw'}
+                        </button>
+                      </div>
+                      
+                      <div className="col-12">
+                        <button 
+                          onClick={async () => {
+                            const status = await checkUSDTStatus();
+                            if (status) {
+                              alert(`USDT Balance: ${status.balance}\nUSDT Allowance: ${status.allowance}`);
+                            } else {
+                              alert('Could not fetch USDT status');
+                            }
+                          }}
+                          disabled={loading}
+                          className="btn btn-info w-100 btn-sm"
+                        >
+                          🔍 Check USDT Status
                         </button>
                       </div>
                     </div>
