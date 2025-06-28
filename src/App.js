@@ -298,125 +298,6 @@ export default function App() {
     }
   };
 
-  // Enhanced checkUSDTStatus with detailed info
-  const checkUSDTStatusDetailed = async () => {
-    if (!signer || !account) {
-      alert('Wallet not connected');
-      return;
-    }
-    
-    try {
-      const usdt = new Contract(USDT_ADDRESS, USDT_ABI, signer);
-      const balance = await usdt.balanceOf(account);
-      const allowance = await usdt.allowance(account, CONTRACT_ADDRESS);
-      
-      const balanceFormatted = formatUnits(balance, 18);
-      const allowanceFormatted = formatUnits(allowance, 18);
-      
-      console.log('USDT Balance:', balanceFormatted);
-      console.log('USDT Allowance:', allowanceFormatted);
-      
-      let message = `USDT Status:\n`;
-      message += `Balance: ${balanceFormatted} USDT\n`;
-      message += `Allowance: ${allowanceFormatted} USDT\n\n`;
-      
-      // Check common issues
-      if (parseFloat(balanceFormatted) === 0) {
-        message += `⚠️ You have no USDT balance\n`;
-      } else if (parseFloat(balanceFormatted) < 10) {
-        message += `⚠️ Low USDT balance (need at least 10 for registration)\n`;
-      }
-      
-      if (parseFloat(allowanceFormatted) === 0) {
-        message += `⚠️ No USDT allowance approved\n`;
-      } else if (parseFloat(allowanceFormatted) < 10) {
-        message += `⚠️ Low USDT allowance (need at least 10 for registration)\n`;
-      }
-      
-      if (parseFloat(balanceFormatted) >= 10 && parseFloat(allowanceFormatted) >= 10) {
-        message += `✅ USDT status looks good for registration\n`;
-      }
-      
-      alert(message);
-      
-      return {
-        balance: balanceFormatted,
-        allowance: allowanceFormatted
-      };
-    } catch (err) {
-      console.error('Error checking USDT status:', err);
-      alert(`Error checking USDT status: ${err.message}`);
-      return null;
-    }
-  };
-
-  // Debug function
-  const debugContractState = async () => {
-    if (!contract || !account) {
-      console.log('Contract or account not available');
-      return;
-    }
-
-    try {
-      console.log('=== DEBUGGING CONTRACT STATE ===');
-      
-      // Check if user is already registered
-      try {
-        const userDetails = await contract.getMyDetails();
-        console.log('User Details:', {
-          id: userDetails[0].toString(),
-          wallet: userDetails[1],
-          referrerId: userDetails[2].toString(),
-          uplines: userDetails[3].map(u => u.toString()),
-          level: userDetails[4],
-          balance: formatUnits(userDetails[5], 18),
-          exists: userDetails[6]
-        });
-      } catch (err) {
-        console.log('User not registered (expected for new users)');
-      }
-
-      // Check USDT details
-      const usdt = new Contract(USDT_ADDRESS, USDT_ABI, signer);
-      const usdtBalance = await usdt.balanceOf(account);
-      const usdtAllowance = await usdt.allowance(account, CONTRACT_ADDRESS);
-      
-      console.log('USDT Status:', {
-        balance: formatUnits(usdtBalance, 18),
-        allowance: formatUnits(usdtAllowance, 18),
-        balanceWei: usdtBalance.toString(),
-        allowanceWei: usdtAllowance.toString()
-      });
-
-      // Check network details
-      const provider = new BrowserProvider(window.ethereum);
-      const network = await provider.getNetwork();
-      const gasPrice = await provider.getFeeData();
-      
-      console.log('Network Info:', {
-        chainId: network.chainId.toString(),
-        name: network.name,
-        gasPrice: gasPrice.gasPrice?.toString()
-      });
-
-      // Check wallet balance for gas
-      const balance = await provider.getBalance(account);
-      console.log('Wallet Balance:', {
-        native: formatUnits(balance, 18),
-        symbol: CURRENCY_SYMBOL
-      });
-
-      console.log('Contract Addresses:', {
-        contract: CONTRACT_ADDRESS,
-        usdt: USDT_ADDRESS
-      });
-
-    } catch (err) {
-      console.error('Debug error:', err);
-    }
-  };
-
-  // Enhanced register function with better error handling
   const register = async () => {
     try {
       setLoading(true);
@@ -426,27 +307,12 @@ export default function App() {
       const usdtStatus = await checkUSDTStatus();
       if (usdtStatus) {
         console.log('USDT Status:', usdtStatus);
-        
-        // Check if user has enough USDT balance (assuming 10 USDT minimum)
-        if (parseFloat(usdtStatus.balance) < 10) {
+        if (parseFloat(usdtStatus.allowance) < 10) { // Assuming registration costs less than 10 USDT
+          throw new Error('Insufficient USDT allowance. Please approve USDT first (need at least 10 USDT allowance)');
+        }
+        if (parseFloat(usdtStatus.balance) < 10) { // Assuming registration costs less than 10 USDT
           throw new Error('Insufficient USDT balance. You need at least 10 USDT to register');
         }
-        
-        // Check if user has enough allowance (assuming 10 USDT minimum)
-        if (parseFloat(usdtStatus.allowance) < 10) {
-          throw new Error('Insufficient USDT allowance. Please approve more USDT (need at least 10 USDT allowance)');
-        }
-      }
-
-      // Check if already registered
-      try {
-        const existingUser = await contract.getMyDetails();
-        if (existingUser && existingUser[6]) { // exists flag
-          throw new Error('You are already registered with this wallet address');
-        }
-      } catch (err) {
-        // If getMyDetails fails, user is probably not registered, which is expected
-        console.log('User not registered yet (expected)');
       }
 
       const referrer = prompt("Enter referrer address (or press Cancel for zero address):");
@@ -464,37 +330,28 @@ export default function App() {
 
       console.log('Attempting to register with referrer:', referrerAddress);
       
-      // Try with higher gas limit and different approach
+      // Try to estimate gas first to get a clearer error
       try {
-        // First try to call the function statically to see if it would succeed
-        await contract.register.staticCall(referrerAddress);
-        console.log('Static call successful, proceeding with transaction');
-      } catch (staticError) {
-        console.error('Static call failed:', staticError);
+        const gasEstimate = await contract.register.estimateGas(referrerAddress);
+        console.log('Gas estimate successful:', gasEstimate.toString());
+      } catch (gasError) {
+        console.error('Gas estimation failed:', gasError);
         
-        // Parse common error messages
-        const errorMessage = staticError.message.toLowerCase();
-        
-        if (errorMessage.includes('already registered') || errorMessage.includes('user exists')) {
-          throw new Error('You are already registered with this wallet address');
-        } else if (errorMessage.includes('referrer') || errorMessage.includes('invalid referrer')) {
-          throw new Error('Invalid referrer: The referrer address must be registered in the system first');
-        } else if (errorMessage.includes('allowance') || errorMessage.includes('transfer amount exceeds allowance')) {
-          throw new Error('Insufficient USDT allowance. Please approve more USDT first');
-        } else if (errorMessage.includes('balance') || errorMessage.includes('transfer amount exceeds balance')) {
-          throw new Error('Insufficient USDT balance for registration');
-        } else if (errorMessage.includes('fee') || errorMessage.includes('amount')) {
-          throw new Error('Registration fee issue. Please ensure you have enough USDT balance and allowance');
+        // Try to get more specific error information
+        if (gasError.message.includes('already registered')) {
+          throw new Error('You are already registered');
+        } else if (gasError.message.includes('allowance')) {
+          throw new Error('Insufficient USDT allowance. Please approve USDT first');
+        } else if (gasError.message.includes('balance')) {
+          throw new Error('Insufficient USDT balance');
+        } else if (gasError.message.includes('referrer')) {
+          throw new Error('Invalid referrer address or referrer not registered');
         } else {
-          throw new Error(`Registration failed: ${staticError.reason || staticError.message || 'Unknown contract error'}`);
+          throw new Error(`Registration failed: ${gasError.message || 'Unknown contract error'}`);
         }
       }
 
-      // If static call succeeded, proceed with actual transaction
-      const tx = await contract.register(referrerAddress, {
-        gasLimit: 300000 // Set a higher gas limit
-      });
-      
+      const tx = await contract.register(referrerAddress);
       console.log('Transaction sent:', tx.hash);
       
       const receipt = await tx.wait();
@@ -502,22 +359,9 @@ export default function App() {
       
       alert("Registered successfully!");
       await loadUser(contract);
-      
     } catch (err) {
       console.error('Register error:', err);
-      
-      // Enhanced error messages
-      let userFriendlyMessage = err.message;
-      
-      if (err.code === 'CALL_EXCEPTION') {
-        userFriendlyMessage = 'Transaction failed. Please check: 1) You have enough USDT balance, 2) You have approved enough USDT, 3) Your referrer is valid and registered, 4) You are not already registered';
-      } else if (err.code === 'INSUFFICIENT_FUNDS') {
-        userFriendlyMessage = 'Insufficient funds for gas fees. Please add more ' + CURRENCY_SYMBOL + ' to your wallet';
-      } else if (err.code === 'USER_REJECTED') {
-        userFriendlyMessage = 'Transaction was cancelled by user';
-      }
-      
-      setError(userFriendlyMessage);
+      setError(err.message || 'Failed to register');
     } finally {
       setLoading(false);
     }
@@ -783,3 +627,114 @@ export default function App() {
                   <div>
                       <div className="card bg-light mb-3">
                         <div className="card-body p-3">
+                          <p className="card-text small text-muted mb-1">Connected Account:</p>
+                          <p className="card-text font-monospace small text-break">{account}</p>
+                          <p className="card-text small text-muted mb-0">
+                            Network: {NETWORK_NAME} ({CHAIN_ID})
+                          </p>
+                          {walletType && (
+                            <p className="card-text small text-success mb-0">
+                              Via: {walletType}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+
+                    {user ? (
+                      <div className="alert alert-success" role="alert">
+                        <h6 className="alert-heading fw-bold">User Details:</h6>
+                        <p className="mb-1"><strong>ID:</strong> {user.id}</p>
+                        <p className="mb-1"><strong>Level:</strong> {user.level}</p>
+                        <p className="mb-0"><strong>Balance:</strong> {user.balance} USDT</p>
+                      </div>
+                    ) : (
+                      <div className="alert alert-warning" role="alert">
+                        🔔 You are not registered yet.
+                      </div>
+                    )}
+
+                    <div className="row g-2 mb-3">
+                      <div className="col-6">
+                        <button 
+                          onClick={approveUSDT}
+                          disabled={loading}
+                          className="btn btn-success w-100"
+                        >
+                          {loading ? (
+                            <span className="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                          ) : 'Approve USDT'}
+                        </button>
+                      </div>
+                      
+                      <div className="col-6">
+                        <button 
+                          onClick={register}
+                          disabled={loading || user}
+                          className="btn btn-primary w-100"
+                        >
+                          {loading ? (
+                            <span className="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                          ) : 'Register'}
+                        </button>
+                      </div>
+                      
+                      <div className="col-6">
+                        <button 
+                          onClick={upgrade}
+                          disabled={loading || !user}
+                          className="btn btn-warning w-100"
+                        >
+                          {loading ? (
+                            <span className="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                          ) : 'Upgrade'}
+                        </button>
+                      </div>
+                      
+                      <div className="col-6">
+                        <button 
+                          onClick={withdraw}
+                          disabled={loading || !user}
+                          className="btn btn-danger w-100"
+                        >
+                          {loading ? (
+                            <span className="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                          ) : 'Withdraw'}
+                        </button>
+                      </div>
+                      
+                      <div className="col-12">
+                        <button 
+                          onClick={async () => {
+                            const status = await checkUSDTStatus();
+                            if (status) {
+                              alert(`USDT Balance: ${status.balance}\nUSDT Allowance: ${status.allowance}`);
+                            } else {
+                              alert('Could not fetch USDT status');
+                            }
+                          }}
+                          disabled={loading}
+                          className="btn btn-info w-100 btn-sm"
+                        >
+                          🔍 Check USDT Status
+                        </button>
+                      </div>
+                    </div>
+
+                    {loading && (
+                      <div className="text-center">
+                        <div className="spinner-border text-primary" role="status">
+                          <span className="visually-hidden">Loading...</span>
+                        </div>
+                        <p className="text-muted mt-2 small">Processing transaction...</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
